@@ -15,20 +15,56 @@ print("\n" + "="*60)
 print("🩸 BLOOD DONOR ELIGIBILITY API")
 print("="*60)
 
-# ------------ INITIALIZE FIREBASE ------------
-print("\n🔥 Initializing Firebase...")
+# ------------ INITIALIZE FIREBASE FROM ENVIRONMENT VARIABLES ------------
+print("\n🔥 Initializing Firebase from environment variables...")
+FIREBASE_LOADED = False
+
 try:
-    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-    firebase_key_path = os.path.join(BASE_DIR, "serviceAccountKey.json")
+    import json
     
-    if os.path.exists(firebase_key_path):
-        cred = credentials.Certificate("serviceAccountKey.json")
+    # Check if environment variables exist (Render)
+    if os.environ.get('FIREBASE_PROJECT_ID'):
+        print("✅ Found Firebase environment variables")
+        
+        # Handle private key formatting (important!)
+        private_key = os.environ.get('FIREBASE_PRIVATE_KEY', '')
+        # Replace literal \n with actual newlines if needed
+        if private_key and '\\n' in private_key:
+            private_key = private_key.replace('\\n', '\n')
+        
+        # Create credential dictionary from environment variables
+        firebase_cred_dict = {
+            "type": os.environ.get('FIREBASE_TYPE', 'service_account'),
+            "project_id": os.environ.get('FIREBASE_PROJECT_ID'),
+            "private_key_id": os.environ.get('FIREBASE_PRIVATE_KEY_ID'),
+            "private_key": private_key,
+            "client_email": os.environ.get('FIREBASE_CLIENT_EMAIL'),
+            "client_id": os.environ.get('FIREBASE_CLIENT_ID'),
+            "auth_uri": os.environ.get('FIREBASE_AUTH_URI', 'https://accounts.google.com/o/oauth2/auth'),
+            "token_uri": os.environ.get('FIREBASE_TOKEN_URI', 'https://oauth2.googleapis.com/token')
+        }
+        
+        # Convert dict to JSON string and create credentials
+        cred = credentials.Certificate(json.dumps(firebase_cred_dict))
         firebase_admin.initialize_app(cred)
         FIREBASE_LOADED = True
-        print("✅ Firebase initialized successfully!")
+        print("✅ Firebase initialized successfully from environment variables!")
+    
     else:
-        FIREBASE_LOADED = False
-        print("⚠️ Firebase key not found. FCM notifications disabled.")
+        # Fallback to file method (for local development)
+        print("⚠️ No Firebase env vars found, trying file method...")
+        BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+        firebase_key_path = os.path.join(BASE_DIR, "serviceAccountKey.json")
+        
+        if os.path.exists(firebase_key_path):
+            cred = credentials.Certificate(firebase_key_path)
+            firebase_admin.initialize_app(cred)
+            FIREBASE_LOADED = True
+            print("✅ Firebase initialized successfully from file (local mode)!")
+        else:
+            FIREBASE_LOADED = False
+            print("⚠️ Firebase key not found. FCM notifications disabled.")
+            
 except Exception as e:
     FIREBASE_LOADED = False
     print(f"❌ Firebase initialization failed: {e}")
