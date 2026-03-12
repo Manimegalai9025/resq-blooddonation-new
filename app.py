@@ -36,7 +36,7 @@ except Exception as e:
 # ------------ LOAD MODEL & ENCODERS ------------
 print("\n📦 Loading ML model and encoders...")
 
-MODEL_ACCURACY = "95.2%"  # Set your model's accuracy here
+MODEL_ACCURACY = "95.2%"
 
 try:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -84,7 +84,7 @@ except Exception as e:
     MODEL_LOADED = False
 
 # ------------ IN-MEMORY STORAGE FOR FCM TOKENS ------------
-fcm_tokens_db = {}  # Format: {email: {token, blood_group, eligible}}
+fcm_tokens_db = {}
 
 # ------------ HEALTH CHECK (ROOT) WITH ACCURACY ------------
 @app.route("/", methods=["GET"])
@@ -161,7 +161,6 @@ def send_notification():
         if not hospital or not blood_group:
             return jsonify({"error": "Hospital and blood group required"}), 400
         
-        # Filter eligible donors with matching blood group
         eligible_tokens = []
         for email, info in fcm_tokens_db.items():
             if info.get("blood_group") == blood_group and info.get("eligible"):
@@ -174,7 +173,6 @@ def send_notification():
                 "notified": 0
             }), 200
         
-        # Send FCM notification
         success_count = send_fcm_notification(
             eligible_tokens, urgency, blood_group, hospital, location
         )
@@ -254,12 +252,35 @@ def predict():
             return jsonify({"error": error_msg}), 400
 
         age = data["age"]
-        gender = data["gender"]
+        gender_str = data["gender"]
         blood_group = data["blood_group"]
-        medical_conditions = data["medical_conditions"]
+        medical_conditions_str = data["medical_conditions"]
         months_since_last_donation = data["months_since_last_donation"]
         weight = data["weight"]
         city = data["city"]
+        latitude = data["latitude"]
+        longitude = data["longitude"]
+        
+        # Convert gender string to int (Male=1, Female=0)
+        gender_clean = gender_str.strip().lower()
+        if gender_clean == "male":
+            gender = 1
+        elif gender_clean == "female":
+            gender = 0
+        else:
+            return jsonify({"error": f"Invalid gender: {gender_str}"}), 400
+        
+        # Convert medical conditions string to int (Yes=1, No/None=0)
+        medical_clean = medical_conditions_str.strip().lower()
+        if medical_clean in ["yes", "1", "true"]:
+            medical_conditions = 1
+        elif medical_clean in ["no", "none", "0", "false"]:
+            medical_conditions = 0
+        else:
+            return jsonify({"error": f"Invalid medical condition: {medical_conditions_str}"}), 400
+        
+        print(f"✓ Gender: {gender_str} → {gender}")
+        print(f"✓ Medical: {medical_conditions_str} → {medical_conditions}")
         
         city_df_temp = pd.DataFrame([[city]], columns=["city"])
         blood_df_temp = pd.DataFrame([[blood_group]], columns=["blood_group"])
@@ -280,11 +301,11 @@ def predict():
         feature_dict = {
             "age": [age],
             "gender": [gender],
-            "medical_conditions": [medical_conditions],
-            "months_since_last_donation": [months_since_last_donation],
+            "latitude": [latitude],
+            "longitude": [longitude],
             "weight": [weight],
-            "city": [city],
-            "blood group": [blood_group]
+            "medical_conditions": [medical_conditions],
+            "months_since_last_donation": [months_since_last_donation]
         }
         
         df = pd.DataFrame(feature_dict)
@@ -303,11 +324,9 @@ def predict():
             df = df[expected_features]
             print(f"✓ Columns reordered successfully")
 
-        # Get prediction
         pred = model.predict(df)[0]
         result = "Yes" if pred == 1 else "No"
         
-        # Get prediction probability (confidence)
         if hasattr(model, 'predict_proba'):
             probabilities = model.predict_proba(df)[0]
             confidence = float(max(probabilities) * 100)
@@ -319,9 +338,8 @@ def predict():
         else:
             confidence = 100.0 if result == "Yes" else 0.0
             eligible_prob = confidence
-            print(f"✅ Prediction: {result} (model doesn't support probabilities)\n")
+            print(f"✅ Prediction: {result}\n")
 
-        # Register token if provided and eligible
         if "fcm_token" in data and result == "Yes":
             email = data.get("email", "unknown")
             fcm_tokens_db[email] = {
@@ -348,7 +366,11 @@ def predict():
         print(f"❌ Error: {error_msg}")
         traceback.print_exc()
         return jsonify({"error": error_msg}), 500
-
+    # ------------ DEBUG: VIEW REGISTERED TOKENS ------------
+@app.route("/tokens", methods=["GET"])
+def view_tokens():
+    return jsonify(fcm_tokens_db)
+    
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(debug=False, host='0.0.0.0', port=port)
