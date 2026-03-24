@@ -179,7 +179,7 @@ def register_token():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# ------------ SEND BLOOD REQUEST NOTIFICATION ------------
+# ------------ SEND BLOOD REQUEST NOTIFICATION (FIXED) ------------
 @app.route("/send_notification", methods=["POST"])
 def send_notification():
     if not FIREBASE_LOADED:
@@ -194,74 +194,82 @@ def send_notification():
         urgency = data.get("urgency", "Normal")
         location = data.get("location", "")
         
+        print(f"📢 Sending notification for blood group: {blood_group}")
+        print(f"   Hospital: {hospital}, Urgency: {urgency}")
+        
         if not hospital or not blood_group:
             return jsonify({"error": "Hospital and blood group required"}), 400
         
-        eligible_tokens = []
+        # Find eligible donors
+        eligible_donors = []
         for email, info in fcm_tokens_db.items():
             if info.get("blood_group") == blood_group and info.get("eligible"):
-                eligible_tokens.append(info["token"])
+                eligible_donors.append({
+                    "email": email,
+                    "token": info.get("token")
+                })
         
-        if not eligible_tokens:
+        print(f"✅ Found {len(eligible_donors)} eligible donors for {blood_group}")
+        
+        if not eligible_donors:
             return jsonify({
                 "success": True,
                 "message": "No eligible donors found",
                 "notified": 0
             }), 200
         
-        success_count = send_fcm_notification(
-            eligible_tokens, urgency, blood_group, hospital, location
-        )
+        # Send notifications one by one (FIXED - no send_multicast)
+        sent_count = 0
+        for donor in eligible_donors:
+            token = donor.get("token")
+            if token:
+                try:
+                    # Set title based on urgency
+                    if urgency.lower() == 'critical':
+                        title = f"🚨 CRITICAL: {blood_group} Blood Needed!"
+                    elif urgency.lower() == 'urgent':
+                        title = f"⚠️ URGENT: {blood_group} Blood Needed!"
+                    else:
+                        title = f"📢 {blood_group} Blood Request"
+                    
+                    # Create message
+                    message = messaging.Message(
+                        notification=messaging.Notification(
+                            title=title,
+                            body=f"{hospital} needs {blood_group} blood. Urgency: {urgency}"
+                        ),
+                        data={
+                            "urgency": urgency,
+                            "bloodType": blood_group,
+                            "hospital": hospital,
+                            "location": location
+                        },
+                        android=messaging.AndroidConfig(
+                            priority='high'
+                        ),
+                        token=token
+                    )
+                    
+                    # Send notification
+                    response = messaging.send(message)
+                    sent_count += 1
+                    print(f"   ✅ Sent to {donor['email']}")
+                    
+                except Exception as e:
+                    print(f"   ❌ Failed to send to {donor['email']}: {e}")
+        
+        print(f"✅ Sent {sent_count}/{len(eligible_donors)} notifications")
         
         return jsonify({
             "success": True,
-            "message": f"Notified {success_count} donors",
-            "notified": success_count
+            "message": f"Notified {sent_count} donors",
+            "notified": sent_count
         }), 200
         
     except Exception as e:
         print(f"❌ Error: {str(e)}")
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
-
-def send_fcm_notification(tokens, urgency, blood_type, hospital, location):
-    try:
-        if urgency.lower() == 'critical':
-            title = f"🚨 CRITICAL: {blood_type} Blood Needed!"
-        elif urgency.lower() == 'urgent':
-            title = f"⚠️ URGENT: {blood_type} Blood Needed!"
-        else:
-            title = f"📢 {blood_type} Blood Request"
-        
-        message = messaging.MulticastMessage(
-            tokens=tokens,
-            data={
-                'urgency': urgency,
-                'bloodType': blood_type,
-                'hospital': hospital,
-                'location': location
-            },
-            android=messaging.AndroidConfig(
-                priority='high',
-                notification=messaging.AndroidNotification(
-                    title=title,
-                    body=f"{hospital} needs {blood_type} blood",
-                    color='#FF0000'
-                )
-            )
-        )
-        
-        response = messaging.send_multicast(message)
-        print(f"✅ Sent {response.success_count}/{len(tokens)} notifications")
-        
-        if response.failure_count > 0:
-            print(f"⚠️ {response.failure_count} notifications failed")
-        
-        return response.success_count
-        
-    except Exception as e:
-        print(f"❌ FCM Error: {str(e)}")
-        return 0
 
 # ------------ PREDICT API WITH CONFIDENCE ------------
 @app.route("/predict", methods=["POST"])
@@ -376,6 +384,7 @@ def predict():
             eligible_prob = confidence
             print(f"✅ Prediction: {result}\n")
 
+        # Auto-register eligible donor
         if "fcm_token" in data and result == "Yes":
             email = data.get("email", "unknown")
             fcm_tokens_db[email] = {
@@ -402,7 +411,8 @@ def predict():
         print(f"❌ Error: {error_msg}")
         traceback.print_exc()
         return jsonify({"error": error_msg}), 500
-    # ------------ DEBUG: VIEW REGISTERED TOKENS ------------
+
+# ------------ DEBUG: VIEW REGISTERED TOKENS ------------
 @app.route("/tokens", methods=["GET"])
 def view_tokens():
     return jsonify(fcm_tokens_db)
