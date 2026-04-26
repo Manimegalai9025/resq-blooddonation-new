@@ -5,7 +5,11 @@ import pandas as pd
 import numpy as np
 import os
 import traceback
+import requests 
+import json
 import firebase_admin
+import google.auth.transport.requests
+from google.oauth2 import service_account
 from firebase_admin import credentials, messaging
 
 app = Flask(__name__)
@@ -182,23 +186,12 @@ def register_token():
 # ------------ SEND BLOOD REQUEST NOTIFICATION (FIXED) ------------
 @app.route("/send_notification", methods=["POST"])
 def send_notification():
-    if not FIREBASE_LOADED:
-        return jsonify({
-            "error": "Firebase not initialized"
-        }), 500
-    
     try:
         data = request.get_json()
         hospital = data.get("hospital")
         blood_group = data.get("blood_group")
         urgency = data.get("urgency", "Normal")
         location = data.get("location", "")
-        
-        print(f"📢 Sending notification for blood group: {blood_group}")
-        print(f"   Hospital: {hospital}, Urgency: {urgency}")
-        
-        if not hospital or not blood_group:
-            return jsonify({"error": "Hospital and blood group required"}), 400
         
         # Find eligible donors
         eligible_donors = []
@@ -212,13 +205,30 @@ def send_notification():
         print(f"✅ Found {len(eligible_donors)} eligible donors for {blood_group}")
         
         if not eligible_donors:
-            return jsonify({
-                "success": True,
-                "message": "No eligible donors found",
-                "notified": 0
-            }), 200
+            return jsonify({"success": True, "notified": 0}), 200
         
-        # Send notifications one by one (FIXED - no send_multicast)
+        # Get credentials from environment variable
+        cred_json = os.environ.get('FIREBASE_CREDENTIALS')
+        
+        if not cred_json:
+            return jsonify({"error": "FIREBASE_CREDENTIALS not configured"}), 500
+        
+        # Parse the JSON credentials (FCM HTTP v1 authentication)
+        cred_dict = json.loads(cred_json)
+        credentials = service_account.Credentials.from_service_account_info(
+            cred_dict,
+            scopes=['https://www.googleapis.com/auth/firebase.messaging']
+        )
+        
+        # Request a fresh access token
+        auth_req = google.auth.transport.requests.Request()
+        credentials.refresh(auth_req)
+        access_token = credentials.token
+        
+        # Your Firebase Project ID - get from your service account JSON
+        PROJECT_ID = cred_dict.get("project_id", "blood-donation-app-547e3")
+        
+        # Send notifications using FCM HTTP v1 API (correct method)
         sent_count = 0
         for donor in eligible_donors:
             token = donor.get("token")
@@ -232,39 +242,46 @@ def send_notification():
                     else:
                         title = f"📢 {blood_group} Blood Request"
                     
-                    # Create message
-                    message = messaging.Message(
-                        notification=messaging.Notification(
-                            title=title,
-                            body=f"{hospital} needs {blood_group} blood. Urgency: {urgency}"
-                        ),
-                        data={
-                            "urgency": urgency,
-                            "bloodType": blood_group,
-                            "hospital": hospital,
-                            "location": location
-                        },
-                        android=messaging.AndroidConfig(
-                            priority='high'
-                        ),
-                        token=token
-                    )
+                    # Construct the v1 API payload
+                    payload = {
+                        "message": {
+                            "token": token,
+                            "notification": {
+                                "title": title,
+                                "body": f"{hospital} needs {blood_group} blood. Urgency: {urgency}"
+                            },
+                            "android": {
+                                "priority": "HIGH"
+                            },
+                            "data": {
+                                "urgency": urgency,
+                                "bloodType": blood_group,
+                                "hospital": hospital,
+                                "location": location
+                            }
+                        }
+                    }
                     
-                    # Send notification
-                    response = messaging.send(message)
-                    sent_count += 1
-                    print(f"   ✅ Sent to {donor['email']}")
+                    # Send to FCM v1 endpoint
+                    url = f"https://fcm.googleapis.com/v1/projects/{PROJECT_ID}/messages:send"
+                    headers = {
+                        "Authorization": f"Bearer {access_token}",
+                        "Content-Type": "application/json"
+                    }
                     
+                    response = requests.post(url, headers=headers, json=payload)
+                    
+                    if response.status_code == 200:
+                        sent_count += 1
+                        print(f"   ✅ Sent to {donor['email']}")
+                    else:
+                        print(f"   ❌ Failed to {donor['email']}: {response.text}")
+                        
                 except Exception as e:
-                    print(f"   ❌ Failed to send to {donor['email']}: {e}")
+                    print(f"   ❌ Error sending to {donor['email']}: {e}")
         
         print(f"✅ Sent {sent_count}/{len(eligible_donors)} notifications")
-        
-        return jsonify({
-            "success": True,
-            "message": f"Notified {sent_count} donors",
-            "notified": sent_count
-        }), 200
+        return jsonify({"success": True, "notified": sent_count}), 200
         
     except Exception as e:
         print(f"❌ Error: {str(e)}")
