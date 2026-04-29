@@ -248,7 +248,7 @@ def send_notification():
                             "token": token,
                             "notification": {
                                 "title": title,
-                                "body": f"{hospital} needs {blood_group} blood. Urgency: {urgency}"
+                                "body": f"Hospital: {hospital}\nBlood Group: {blood_group}\nLocation: {location}\nUrgency: {urgency}\nUnits: 2 needed"
                             },
                             "android": {
                                 "priority": "HIGH"
@@ -257,7 +257,8 @@ def send_notification():
                                 "urgency": urgency,
                                 "bloodType": blood_group,
                                 "hospital": hospital,
-                                "location": location
+                                "location": location,
+                                "click_action": "OPEN_REQUEST_DETAILS"
                             }
                         }
                     }
